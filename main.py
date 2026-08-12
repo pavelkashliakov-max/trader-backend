@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Используем папку /tmp для стабильного сохранения между перезапусками
+# Используем надежный путь для хранения базы данных
 DB_PATH = "/tmp/users.db" if os.path.exists("/tmp") else "users.db"
 
 def init_db():
@@ -46,7 +46,7 @@ class UserProgress(BaseModel):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Trader RPG API online"}
+    return {"status": "ok", "message": "Trader RPG API Online"}
 
 @app.get("/api/user/{user_id}")
 def get_user(user_id: int):
@@ -58,6 +58,7 @@ def get_user(user_id: int):
     conn.close()
     
     if not row:
+        # Если пользователя еще нет в базе — создаем его
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
@@ -81,7 +82,6 @@ def get_user(user_id: int):
 def save_progress(data: UserProgress):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # Проверяем есть ли юзер
     cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (data.user_id,))
     exists = cursor.fetchone()
     
