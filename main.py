@@ -1,6 +1,6 @@
 import sqlite3
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -41,6 +41,7 @@ init_db()
 
 class UserProgress(BaseModel):
     user_id: int
+    username: str = "Player"
     xp: int
     coins: int
     energy: int = 100
@@ -65,21 +66,18 @@ def get_user(user_id: int):
     
     if not row:
         cursor.execute(
-            "INSERT INTO users (user_id, username, xp, coins, energy, max_energy, current_lesson, streak, last_login, clan) VALUES (?, 'Player', 0, 0, 100, 100, 0, 1, ?, 'Нет')",
+            "INSERT INTO users (user_id, username, xp, coins, energy, max_energy, current_lesson, streak, last_login, clan) VALUES (?, 'Трейдер', 0, 0, 100, 100, 0, 1, ?, 'Нет')",
             (user_id, today_str)
         )
         conn.commit()
         conn.close()
         return {
-            "user_id": user_id, "xp": 0, "coins": 0, "energy": 100, "max_energy": 100,
+            "user_id": user_id, "username": "Трейдер", "xp": 0, "coins": 0, "energy": 100, "max_energy": 100,
             "current": 0, "streak": 1, "last_login": today_str, "clan": "Нет"
         }
     
-    # Расчет стриков
     last_login_str = row["last_login"]
     streak = row["streak"] or 0
-    energy = row["energy"]
-    max_energy = row["max_energy"] or 100
     
     if last_login_str:
         last_date = datetime.strptime(last_login_str, "%Y-%m-%d").date()
@@ -98,14 +96,41 @@ def get_user(user_id: int):
     
     return {
         "user_id": row["user_id"],
+        "username": row["username"] or "Трейдер",
         "xp": row["xp"],
         "coins": row["coins"],
-        "energy": energy,
-        "max_energy": max_energy,
+        "energy": row["energy"],
+        "max_energy": row["max_energy"] or 100,
         "current": row["current_lesson"],
         "streak": streak,
         "clan": row["clan"]
     }
+
+# 🏆 Новый эндпоинт: Выдача Топ-50 игроков по XP
+@app.get("/api/leaderboard")
+def get_leaderboard():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT user_id, username, xp, streak, current_lesson 
+        FROM users 
+        ORDER BY xp DESC 
+        LIMIT 50
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for r in rows:
+        result.append({
+            "user_id": r["user_id"],
+            "username": r["username"] or f"Player #{r['user_id'] % 10000}",
+            "xp": r["xp"],
+            "streak": r["streak"] or 1,
+            "current": r["current_lesson"]
+        })
+    return result
 
 @app.post("/api/user/save")
 def save_progress(data: UserProgress):
@@ -115,15 +140,15 @@ def save_progress(data: UserProgress):
     
     cursor.execute("""
         UPDATE users 
-        SET xp = ?, coins = ?, energy = ?, max_energy = ?, current_lesson = ?, streak = ?, clan = ?, last_login = ?
+        SET username = ?, xp = ?, coins = ?, energy = ?, max_energy = ?, current_lesson = ?, streak = ?, clan = ?, last_login = ?
         WHERE user_id = ?
-    """, (data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str, data.user_id))
+    """, (data.username, data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str, data.user_id))
     
     if cursor.rowcount == 0:
         cursor.execute("""
             INSERT INTO users (user_id, username, xp, coins, energy, max_energy, current_lesson, streak, clan, last_login)
-            VALUES (?, 'Player', ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (data.user_id, data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (data.user_id, data.username, data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str))
         
     conn.commit()
     conn.close()
