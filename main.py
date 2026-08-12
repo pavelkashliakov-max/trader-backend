@@ -1,8 +1,6 @@
 import sqlite3
 import os
-import random
 from datetime import datetime, timezone
-from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -33,23 +31,11 @@ def init_db():
             username TEXT,
             xp INTEGER DEFAULT 0,
             coins INTEGER DEFAULT 0,
-            sim_balance REAL DEFAULT 10000.0,
             energy INTEGER DEFAULT 100,
             max_energy INTEGER DEFAULT 100,
-            current_lesson INTEGER DEFAULT 0,
-            streak INTEGER DEFAULT 0,
-            last_login TEXT,
-            clan TEXT DEFAULT 'Нет',
-            referrer_id INTEGER DEFAULT NULL,
-            title TEXT DEFAULT 'Новичок',
-            theme TEXT DEFAULT 'neon',
-            pvp_wins INTEGER DEFAULT 0,
-            claimed_daily_day INTEGER DEFAULT 0,
-            last_daily_claim TEXT DEFAULT '',
-            last_energy_update TEXT
+            current_lesson INTEGER DEFAULT 0
         )
     """)
-    # Таблица пройденных фаз
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS completed_phases (
             user_id INTEGER,
@@ -63,7 +49,7 @@ def init_db():
 
 init_db()
 
-# База фаз обучения (120-дневный план)
+# База учебных фаз
 PHASES_DATA = {
     "phase_00": {
         "id": "phase_00",
@@ -72,7 +58,7 @@ PHASES_DATA = {
         "theory": {
             "fact": "Маркет-ордер исполняется мгновенно по стакану, снимая комиссию Taker. Лимитный ордер добавляет ликвидность в стакан (Maker).",
             "interpretation": "При резком всплеске Taker-покупок цена импульсивно растет, пробивая ближайшие лимитные уровни.",
-            "hypothesis": "Торговать против импульса без подтверждения лимитным плотным уровнем опасным."
+            "hypothesis": "Торговать против импульса без подтверждения лимитным плотным уровнем опасно."
         },
         "quiz": {
             "question": "Что происходит при исполнении Market-Buy ордера?",
@@ -104,26 +90,6 @@ PHASES_DATA = {
             "correct_index": 1
         },
         "reward": {"coins": 200, "xp": 70}
-    },
-    "phase_04": {
-        "id": "phase_04",
-        "title": "Phase 04 · Ликвидность и Sweeps",
-        "energy_cost": 15,
-        "theory": {
-            "fact": "Цена резко вышла за пределы равных максимумов (EQH) и мгновенно вернулась обратно под уровень.",
-            "interpretation": "Произошло снятие ликвидности (Liquidity Sweep) — крупный игрок исполнил свои ордера об стоп-лоссы розничных трейдеров.",
-            "hypothesis": "Заходить в SHORT-позицию после подтверждения возврата цены под уровень."
-        },
-        "quiz": {
-            "question": "Какова главная цель захода цены за каскад равных максимумов (EQH)?",
-            "options": [
-                "Сбор ликвидности (стоп-лоссов) крупным участником",
-                "Технический сбой торгового терминала",
-                "Начало долгосрочного бычьего тренда"
-            ],
-            "correct_index": 0
-        },
-        "reward": {"coins": 300, "xp": 100}
     }
 }
 
@@ -142,7 +108,7 @@ def get_user_phases(user_id: int):
 
     result = []
     for p_id, p_data in PHASES_DATA.items():
-        item = {
+        result.append({
             "id": p_id,
             "title": p_data["title"],
             "energy_cost": p_data["energy_cost"],
@@ -151,9 +117,7 @@ def get_user_phases(user_id: int):
             "options": p_data["quiz"]["options"],
             "reward": p_data["reward"],
             "is_completed": p_id in completed
-        }
-        result.append(item)
-        
+        })
     return {"phases": result}
 
 @app.post("/api/phases/complete")
@@ -175,12 +139,12 @@ def complete_phase(req: QuizAnswerRequest):
         conn.close()
         return {"success": False, "message": "Недостаточно энергии!"}
 
-    # Проверка ответа
+    # Проверка правильности ответа на тест
     if req.selected_option != phase["quiz"]["correct_index"]:
         conn.close()
-        return {"success": False, "message": "Неверный ответ! Перечитайте триаду (Факт-Интерпретация-Гипотеза) и попробуйте снова."}
+        return {"success": False, "message": "Неверный ответ. Изучите теорию еще раз и повторите попытку."}
 
-    # Проверка на повторное прохождение
+    # Проверка: проходил ли ранее
     cursor.execute("SELECT 1 FROM completed_phases WHERE user_id = ? AND phase_id = ?", (req.user_id, req.phase_id))
     already_done = cursor.fetchone()
 
@@ -206,7 +170,7 @@ def complete_phase(req: QuizAnswerRequest):
 
     return {
         "success": True,
-        "message": "Уровень пройден!" if not already_done else "Тест пройден повторно (без повторного зачисления монет)",
+        "message": "Уровень успешно пройден!" if not already_done else "Тест пройден повторно (без начисления монет)",
         "coins": new_coins,
         "xp": new_xp,
         "energy": new_energy
