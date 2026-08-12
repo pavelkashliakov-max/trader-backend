@@ -26,6 +26,7 @@ def init_db():
             username TEXT,
             xp INTEGER DEFAULT 0,
             coins INTEGER DEFAULT 0,
+            sim_balance REAL DEFAULT 10000.0,
             energy INTEGER DEFAULT 100,
             max_energy INTEGER DEFAULT 100,
             current_lesson INTEGER DEFAULT 0,
@@ -44,6 +45,7 @@ class UserProgress(BaseModel):
     username: str = "Player"
     xp: int
     coins: int
+    sim_balance: float = 10000.0
     energy: int = 100
     max_energy: int = 100
     current_lesson: int
@@ -52,7 +54,7 @@ class UserProgress(BaseModel):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Trader RPG Economy API Online"}
+    return {"status": "ok", "message": "Trader RPG Simulator API Online"}
 
 @app.get("/api/user/{user_id}")
 def get_user(user_id: int):
@@ -66,14 +68,14 @@ def get_user(user_id: int):
     
     if not row:
         cursor.execute(
-            "INSERT INTO users (user_id, username, xp, coins, energy, max_energy, current_lesson, streak, last_login, clan) VALUES (?, 'Трейдер', 0, 0, 100, 100, 0, 1, ?, 'Нет')",
+            "INSERT INTO users (user_id, username, xp, coins, sim_balance, energy, max_energy, current_lesson, streak, last_login, clan) VALUES (?, 'Трейдер', 0, 0, 10000.0, 100, 100, 0, 1, ?, 'Нет')",
             (user_id, today_str)
         )
         conn.commit()
         conn.close()
         return {
-            "user_id": user_id, "username": "Трейдер", "xp": 0, "coins": 0, "energy": 100, "max_energy": 100,
-            "current": 0, "streak": 1, "last_login": today_str, "clan": "Нет"
+            "user_id": user_id, "username": "Трейдер", "xp": 0, "coins": 0, "sim_balance": 10000.0, 
+            "energy": 100, "max_energy": 100, "current": 0, "streak": 1, "last_login": today_str, "clan": "Нет"
         }
     
     last_login_str = row["last_login"]
@@ -99,6 +101,7 @@ def get_user(user_id: int):
         "username": row["username"] or "Трейдер",
         "xp": row["xp"],
         "coins": row["coins"],
+        "sim_balance": row["sim_balance"] or 10000.0,
         "energy": row["energy"],
         "max_energy": row["max_energy"] or 100,
         "current": row["current_lesson"],
@@ -106,7 +109,6 @@ def get_user(user_id: int):
         "clan": row["clan"]
     }
 
-# 🏆 Новый эндпоинт: Выдача Топ-50 игроков по XP
 @app.get("/api/leaderboard")
 def get_leaderboard():
     conn = sqlite3.connect(DB_PATH)
@@ -140,15 +142,15 @@ def save_progress(data: UserProgress):
     
     cursor.execute("""
         UPDATE users 
-        SET username = ?, xp = ?, coins = ?, energy = ?, max_energy = ?, current_lesson = ?, streak = ?, clan = ?, last_login = ?
+        SET username = ?, xp = ?, coins = ?, sim_balance = ?, energy = ?, max_energy = ?, current_lesson = ?, streak = ?, clan = ?, last_login = ?
         WHERE user_id = ?
-    """, (data.username, data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str, data.user_id))
+    """, (data.username, data.xp, data.coins, data.sim_balance, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str, data.user_id))
     
     if cursor.rowcount == 0:
         cursor.execute("""
-            INSERT INTO users (user_id, username, xp, coins, energy, max_energy, current_lesson, streak, clan, last_login)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (data.user_id, data.username, data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str))
+            INSERT INTO users (user_id, username, xp, coins, sim_balance, energy, max_energy, current_lesson, streak, clan, last_login)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (data.user_id, data.username, data.xp, data.coins, data.sim_balance, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str))
         
     conn.commit()
     conn.close()
