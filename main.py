@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -14,7 +15,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Используем надежный путь для хранения базы данных
 DB_PATH = "/tmp/users.db" if os.path.exists("/tmp") else "users.db"
 
 def init_db():
@@ -27,7 +27,10 @@ def init_db():
             xp INTEGER DEFAULT 0,
             coins INTEGER DEFAULT 0,
             energy INTEGER DEFAULT 100,
+            max_energy INTEGER DEFAULT 100,
             current_lesson INTEGER DEFAULT 0,
+            streak INTEGER DEFAULT 0,
+            last_login TEXT,
             clan TEXT DEFAULT 'Нет'
         )
     """)
@@ -41,12 +44,14 @@ class UserProgress(BaseModel):
     xp: int
     coins: int
     energy: int = 100
+    max_energy: int = 100
     current_lesson: int
+    streak: int = 0
     clan: str = "Нет"
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Trader RPG API Online"}
+    return {"status": "ok", "message": "Trader RPG Economy API Online"}
 
 @app.get("/api/user/{user_id}")
 def get_user(user_id: int):
@@ -55,26 +60,50 @@ def get_user(user_id: int):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
-    conn.close()
+    
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
     
     if not row:
-        # Если пользователя еще нет в базе — создаем его
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO users (user_id, username, xp, coins, energy, current_lesson, clan) VALUES (?, ?, 0, 0, 100, 0, 'Нет')",
-            (user_id, "Player")
+            "INSERT INTO users (user_id, username, xp, coins, energy, max_energy, current_lesson, streak, last_login, clan) VALUES (?, 'Player', 0, 0, 100, 100, 0, 1, ?, 'Нет')",
+            (user_id, today_str)
         )
         conn.commit()
         conn.close()
-        return {"user_id": user_id, "xp": 0, "coins": 0, "energy": 100, "current": 0, "clan": "Нет"}
+        return {
+            "user_id": user_id, "xp": 0, "coins": 0, "energy": 100, "max_energy": 100,
+            "current": 0, "streak": 1, "last_login": today_str, "clan": "Нет"
+        }
+    
+    # Расчет стриков
+    last_login_str = row["last_login"]
+    streak = row["streak"] or 0
+    energy = row["energy"]
+    max_energy = row["max_energy"] or 100
+    
+    if last_login_str:
+        last_date = datetime.strptime(last_login_str, "%Y-%m-%d").date()
+        today = datetime.utcnow().date()
+        diff = (today - last_date).days
+        
+        if diff == 1:
+            streak += 1
+            cursor.execute("UPDATE users SET streak = ?, last_login = ? WHERE user_id = ?", (streak, today_str, user_id))
+        elif diff > 1:
+            streak = 1
+            cursor.execute("UPDATE users SET streak = ?, last_login = ? WHERE user_id = ?", (streak, today_str, user_id))
+        conn.commit()
+
+    conn.close()
     
     return {
         "user_id": row["user_id"],
         "xp": row["xp"],
         "coins": row["coins"],
-        "energy": row["energy"],
+        "energy": energy,
+        "max_energy": max_energy,
         "current": row["current_lesson"],
+        "streak": streak,
         "clan": row["clan"]
     }
 
@@ -82,20 +111,19 @@ def get_user(user_id: int):
 def save_progress(data: UserProgress):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (data.user_id,))
-    exists = cursor.fetchone()
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
     
-    if exists:
+    cursor.execute("""
+        UPDATE users 
+        SET xp = ?, coins = ?, energy = ?, max_energy = ?, current_lesson = ?, streak = ?, clan = ?, last_login = ?
+        WHERE user_id = ?
+    """, (data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str, data.user_id))
+    
+    if cursor.rowcount == 0:
         cursor.execute("""
-            UPDATE users 
-            SET xp = ?, coins = ?, energy = ?, current_lesson = ?, clan = ?
-            WHERE user_id = ?
-        """, (data.xp, data.coins, data.energy, data.current_lesson, data.clan, data.user_id))
-    else:
-        cursor.execute("""
-            INSERT INTO users (user_id, username, xp, coins, energy, current_lesson, clan)
-            VALUES (?, 'Player', ?, ?, ?, ?, ?)
-        """, (data.user_id, data.xp, data.coins, data.energy, data.current_lesson, data.clan))
+            INSERT INTO users (user_id, username, xp, coins, energy, max_energy, current_lesson, streak, clan, last_login)
+            VALUES (?, 'Player', ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (data.user_id, data.xp, data.coins, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str))
         
     conn.commit()
     conn.close()
