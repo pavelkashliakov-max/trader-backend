@@ -1,7 +1,8 @@
 import sqlite3
 import os
+import random
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -34,7 +35,12 @@ def init_db():
             streak INTEGER DEFAULT 0,
             last_login TEXT,
             clan TEXT DEFAULT 'Нет',
-            referrer_id INTEGER DEFAULT NULL
+            referrer_id INTEGER DEFAULT NULL,
+            title TEXT DEFAULT 'Новичок',
+            theme TEXT DEFAULT 'neon',
+            pvp_wins INTEGER DEFAULT 0,
+            claimed_daily_day INTEGER DEFAULT 0,
+            last_daily_claim TEXT DEFAULT ''
         )
     """)
     conn.commit()
@@ -54,10 +60,17 @@ class UserProgress(BaseModel):
     streak: int = 0
     clan: str = "Нет"
     referrer_id: Optional[int] = None
+    title: str = "Новичок"
+    theme: str = "neon"
+    pvp_wins: int = 0
+
+class PvpBattleRequest(BaseModel):
+    user_id: int
+    bet: float
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Trader RPG Simulator API Online"}
+    return {"status": "ok", "message": "Trader RPG Full Edition API Online"}
 
 @app.get("/api/user/{user_id}")
 def get_user(user_id: int, ref: Optional[int] = None):
@@ -69,18 +82,15 @@ def get_user(user_id: int, ref: Optional[int] = None):
     
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
     
-    # Новый пользователь
     if not row:
         initial_coins = 0
         referrer = None
         
-        # Если пришел по реф. ссылке и это не самореферал
         if ref and ref != user_id:
             cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (ref,))
             if cursor.fetchone():
                 referrer = ref
-                initial_coins = 250  # Бонус новичку
-                # Начисляем бонус рефереру (+500 coins, +50 XP)
+                initial_coins = 250
                 cursor.execute("""
                     UPDATE users 
                     SET coins = coins + 500, xp = xp + 50 
@@ -89,16 +99,14 @@ def get_user(user_id: int, ref: Optional[int] = None):
 
         cursor.execute(
             """INSERT INTO users 
-               (user_id, username, xp, coins, sim_balance, energy, max_energy, current_lesson, streak, last_login, clan, referrer_id) 
-               VALUES (?, 'Трейдер', 0, ?, 10000.0, 100, 100, 0, 1, ?, 'Нет', ?)""",
+               (user_id, username, xp, coins, sim_balance, energy, max_energy, current_lesson, streak, last_login, clan, referrer_id, title, theme, pvp_wins) 
+               VALUES (?, 'Трейдер', 0, ?, 10000.0, 100, 100, 0, 1, ?, 'Нет', ?, 'Новичок', 'neon', 0)""",
             (user_id, initial_coins, today_str, referrer)
         )
         conn.commit()
-        
         cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
 
-    # Стрик логика
     last_login_str = row["last_login"]
     streak = row["streak"] or 0
     
@@ -128,7 +136,80 @@ def get_user(user_id: int, ref: Optional[int] = None):
         "current": row["current_lesson"],
         "streak": streak,
         "clan": row["clan"],
-        "referrer_id": row["referrer_id"]
+        "referrer_id": row["referrer_id"],
+        "title": row["title"] or "Новичок",
+        "theme": row["theme"] or "neon",
+        "pvp_wins": row["pvp_wins"] or 0,
+        "claimed_daily_day": row["claimed_daily_day"] or 0,
+        "last_daily_claim": row["last_daily_claim"] or ""
+    }
+
+@app.post("/api/user/claim_daily")
+def claim_daily(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    if not row:
+        conn.close()
+        return {"error": "User not found"}
+        
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    last_claim = row["last_daily_claim"] or ""
+    
+    if last_claim == today_str:
+        conn.close()
+        return {"status": "already_claimed"}
+        
+    current_day = (row["claimed_daily_day"] or 0) % 7 + 1
+    
+    # Награды за дни
+    rewards = {
+        1: {"coins": 100, "xp": 20},
+        2: {"coins": 200, "xp": 40},
+        3: {"coins": 300, "xp": 60},
+        4: {"coins": 500, "xp": 80},
+        5: {"coins": 750, "xp": 100},
+        6: {"coins": 1000, "xp": 150},
+        7: {"coins": 2500, "xp": 300}
+    }
+    rew = rewards[current_day]
+    
+    cursor.execute("""
+        UPDATE users 
+        SET coins = coins + ?, xp = xp + ?, claimed_daily_day = ?, last_daily_claim = ?
+        WHERE user_id = ?
+    """, (rew["coins"], rew["xp"], current_day, today_str, user_id))
+    
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "day": current_day, "reward": rew}
+
+@app.post("/api/pvp/match")
+def pvp_match(req: PvpBattleRequest):
+    # Генерация результата симуляции дуэли
+    player_score = random.uniform(-3.0, 8.0)
+    bot_score = random.uniform(-2.0, 6.0)
+    
+    win = player_score > bot_score
+    reward = req.bet if win else -req.bet
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    if win:
+        cursor.execute("UPDATE users SET coins = coins + ?, xp = xp + 30, pvp_wins = pvp_wins + 1 WHERE user_id = ?", (req.bet, req.user_id))
+    else:
+        cursor.execute("UPDATE users SET coins = coins - ? WHERE user_id = ?", (req.bet, req.user_id))
+    conn.commit()
+    conn.close()
+    
+    return {
+        "win": win,
+        "player_pnl": round(player_score, 2),
+        "opponent_pnl": round(bot_score, 2),
+        "reward": reward
     }
 
 @app.get("/api/referrals/{user_id}")
@@ -160,7 +241,7 @@ def get_leaderboard():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT user_id, username, xp, streak, current_lesson 
+        SELECT user_id, username, xp, streak, current_lesson, clan, title 
         FROM users 
         ORDER BY xp DESC 
         LIMIT 50
@@ -175,7 +256,9 @@ def get_leaderboard():
             "username": r["username"] or f"Player #{r['user_id'] % 10000}",
             "xp": r["xp"],
             "streak": r["streak"] or 1,
-            "current": r["current_lesson"]
+            "current": r["current_lesson"],
+            "clan": r["clan"] or "Нет",
+            "title": r["title"] or "Новичок"
         })
     return result
 
@@ -187,9 +270,9 @@ def save_progress(data: UserProgress):
     
     cursor.execute("""
         UPDATE users 
-        SET username = ?, xp = ?, coins = ?, sim_balance = ?, energy = ?, max_energy = ?, current_lesson = ?, streak = ?, clan = ?, last_login = ?
+        SET username = ?, xp = ?, coins = ?, sim_balance = ?, energy = ?, max_energy = ?, current_lesson = ?, streak = ?, clan = ?, title = ?, theme = ?, pvp_wins = ?, last_login = ?
         WHERE user_id = ?
-    """, (data.username, data.xp, data.coins, data.sim_balance, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, today_str, data.user_id))
+    """, (data.username, data.xp, data.coins, data.sim_balance, data.energy, data.max_energy, data.current_lesson, data.streak, data.clan, data.title, data.theme, data.pvp_wins, today_str, data.user_id))
     
     conn.commit()
     conn.close()
